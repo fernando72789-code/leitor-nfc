@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14213D">
+<title>Leitor NFC</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF1F6; --card:#FFFFFF; --ink:#14213D; --mute:#5B6785; --line:#D5DBE8;
+  --accent:#2B4BFF; --ok:#13875A; --okbg:#DDF3E8; --no:#C5303A; --nobg:#FBE1E3;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0E1424; --card:#18203A; --ink:#E8ECF8; --mute:#93A0C2; --line:#2A3558;
+    --accent:#7C93FF; --ok:#4FD39A; --okbg:#12392B; --no:#FF7B84; --nobg:#40191D; }
+}
+*{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Sora",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
+main{max-width:560px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.6rem;font-weight:800;margin:8px 0 4px;letter-spacing:-.02em}
+h2{font-size:1rem;font-weight:600;margin:0 0 10px}
+p{margin:0 0 10px;color:var(--mute);font-size:.92rem}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:14px}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px 16px;background:var(--accent);color:#fff;cursor:pointer}
+button.sec{background:transparent;color:var(--ink);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+input{font:inherit;width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.row>*{flex:1 1 auto}
+#estado{border-radius:14px;padding:22px 16px;text-align:center;background:var(--card);border:2px dashed var(--line);margin-top:14px}
+#estado.ok{background:var(--okbg);border:2px solid var(--ok)}
+#estado.no{background:var(--nobg);border:2px solid var(--no)}
+#estado .t{font-size:1.35rem;font-weight:800}
+#estado.ok .t{color:var(--ok)} #estado.no .t{color:var(--no)}
+#estado .s{font-size:.9rem;color:var(--mute);word-break:break-all;margin-top:4px}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line);font-size:.88rem}
+li:first-child{border-top:0}
+li small{color:var(--mute);display:block}
+li button{padding:6px 10px;font-size:.8rem}
+.vazio{color:var(--mute);font-size:.88rem}
+#aviso{background:var(--nobg);border:1px solid var(--no);border-radius:12px;padding:12px;margin-top:14px;font-size:.9rem;display:none}
+code{font-size:.85em}
+</style>
+</head>
+<body>
+<main>
+  <h1>Leitor NFC</h1>
+  <p>Aproxime um cartão ou chaveiro NFC da parte de trás do celular. Cartões cadastrados liberam o acesso; os outros são negados.</p>
+
+  <div id="aviso"></div>
+
+  <div class="row">
+    <button id="btnLer">Iniciar leitura</button>
+    <button id="btnParar" class="sec" disabled>Parar</button>
+  </div>
+
+  <div id="estado" role="status" aria-live="polite">
+    <div class="t">Aguardando cartão</div>
+    <div class="s">Toque em “Iniciar leitura”</div>
+  </div>
+
+  <section>
+    <h2>Cadastrar o último cartão lido</h2>
+    <input id="nome" placeholder="Nome (ex.: Chaveiro azul)" maxlength="40">
+    <div class="row"><button id="btnAut" disabled>Autorizar este cartão</button></div>
+    <h2 style="margin-top:16px">Cartões autorizados</h2>
+    <ul id="listaAut"></ul>
+  </section>
+
+  <section>
+    <h2>Registro de leituras</h2>
+    <ul id="listaLog"></ul>
+    <div class="row">
+      <button id="btnCsv" class="sec">Baixar CSV</button>
+      <button id="btnLimpar" class="sec">Limpar registro</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Gravar texto em uma tag</h2>
+    <p>Funciona em tags NDEF graváveis (como NTAG213). Escreva o texto e encoste a tag no celular.</p>
+    <input id="txt" placeholder="Texto a gravar" maxlength="120">
+    <div class="row"><button id="btnGravar">Gravar na tag</button></div>
+  </section>
+</main>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var estado = $("estado"), aviso = $("aviso");
+  var ndef = null, ctrl = null, ultimoUid = null;
+  var autorizados = carregar("nfc_autorizados"), log = carregar("nfc_log");
+
+  function carregar(k){
+    try { return JSON.parse(localStorage.getItem(k)) || []; } catch(e){ return []; }
+  }
+  function salvar(k, v){
+    try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){}
+  }
+  function mostrar(cls, titulo, sub){
+    estado.className = cls;
+    estado.innerHTML = "";
+    var t = document.createElement("div"); t.className = "t"; t.textContent = titulo;
+    var s = document.createElement("div"); s.className = "s"; s.textContent = sub || "";
+    estado.appendChild(t); estado.appendChild(s);
+  }
+  function erro(msg){ aviso.style.display = "block"; aviso.textContent = msg; }
+
+  if (!("NDEFReader" in window)) {
+    erro("Este navegador não tem Web NFC. Abra esta página no Chrome do Android, com o NFC ligado e endereço https.");
+    $("btnLer").disabled = true; $("btnGravar").disabled = true;
+  }
+
+  function nomeDe(uid){
+    for (var i=0;i<autorizados.length;i++) if (autorizados[i].uid === uid) return autorizados[i].nome;
+    return null;
+  }
+  function desenhar(){
+    var la = $("listaAut"); la.innerHTML = "";
+    if (!autorizados.length) { la.innerHTML = '<li class="vazio">Nenhum cartão cadastrado.</li>'; }
+    autorizados.forEach(function(a, i){
+      var li = document.createElement("li");
+      var d = document.createElement("div");
+      d.textContent = a.nome; var sm = document.createElement("small"); sm.textContent = a.uid; d.appendChild(sm);
+      var b = document.createElement("button"); b.className = "sec"; b.textContent = "Remover";
+      b.onclick = function(){ autorizados.splice(i,1); salvar("nfc_autorizados", autorizados); desenhar(); };
+      li.appendChild(d); li.appendChild(b); la.appendChild(li);
+    });
+    var ll = $("listaLog"); ll.innerHTML = "";
+    if (!log.length) { ll.innerHTML = '<li class="vazio">Nenhuma leitura ainda.</li>'; }
+    log.slice(-15).reverse().forEach(function(r){
+      var li = document.createElement("li");
+      var d = document.createElement("div");
+      d.textContent = (r.nome || "Desconhecido") + " · " + (r.ok ? "liberado" : "negado");
+      var sm = document.createElement("small"); sm.textContent = r.hora + " · " + r.uid; d.appendChild(sm);
+      li.appendChild(d); ll.appendChild(li);
+    });
+  }
+
+  async function iniciar(){
+    try {
+      ndef = new NDEFReader();
+      ctrl = new AbortController();
+      await ndef.scan({ signal: ctrl.signal });
+      $("btnLer").disabled = true; $("btnParar").disabled = false;
+      mostrar("", "Lendo…", "Aproxime o cartão");
+      ndef.onreadingerror = function(){
+        mostrar("no", "Não consegui ler", "Tag não NDEF ou cartão incompatível (ex.: Mifare Classic)");
+      };
+      ndef.onreading = function(ev){
+        var uid = (ev.serialNumber || "").toUpperCase();
+        var nome = nomeDe(uid), ok = !!nome;
+        ultimoUid = uid; $("btnAut").disabled = !uid;
+        var extra = [];
+        ev.message.records.forEach(function(r){
+          try {
+            if (r.recordType === "text" || r.recordType === "url") {
+              extra.push(new TextDecoder(r.encoding || "utf-8").decode(r.data));
+            }
+          } catch(e){}
+        });
+        mostrar(ok ? "ok" : "no", ok ? "Acesso liberado" : "Acesso negado",
+          (nome ? nome + " · " : "") + uid + (extra.length ? " · " + extra.join(" | ") : ""));
+        if (navigator.vibrate) navigator.vibrate(ok ? 80 : [60,60,60]);
+        log.push({ uid: uid, nome: nome, ok: ok, hora: new Date().toLocaleString("pt-BR") });
+        salvar("nfc_log", log); desenhar();
+      };
+    } catch(e){
+      erro("Não foi possível iniciar: " + e.message + ". Confira se o NFC está ligado e se deu permissão.");
+    }
+  }
+  function parar(){
+    if (ctrl) ctrl.abort();
+    $("btnLer").disabled = false; $("btnParar").disabled = true;
+    mostrar("", "Leitura parada", "Toque em “Iniciar leitura”");
+  }
+
+  $("btnLer").onclick = iniciar;
+  $("btnParar").onclick = parar;
+  $("btnAut").onclick = function(){
+    var nome = $("nome").value.trim();
+    if (!ultimoUid || !nome) { erro("Leia um cartão e escreva um nome antes de autorizar."); return; }
+    aviso.style.display = "none";
+    if (!nomeDe(ultimoUid)) autorizados.push({ uid: ultimoUid, nome: nome });
+    salvar("nfc_autorizados", autorizados); $("nome").value = ""; desenhar();
+    mostrar("ok", "Cartão autorizado", nome + " · " + ultimoUid);
+  };
+  $("btnLimpar").onclick = function(){ log = []; salvar("nfc_log", log); desenhar(); };
+  $("btnCsv").onclick = function(){
+    var linhas = ["hora;nome;uid;resultado"].concat(log.map(function(r){
+      return [r.hora, r.nome || "", r.uid, r.ok ? "liberado" : "negado"].join(";");
+    }));
+    var blob = new Blob(["\ufeff" + linhas.join("\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "registro-nfc.csv"; a.click();
+  };
+  $("btnGravar").onclick = async function(){
+    var t = $("txt").value.trim();
+    if (!t) { erro("Escreva o texto que será gravado."); return; }
+    aviso.style.display = "none";
+    try {
+      mostrar("", "Aproxime a tag para gravar…", "");
+      await new NDEFReader().write({ records: [{ recordType: "text", data: t }] });
+      mostrar("ok", "Tag gravada", t);
+    } catch(e){
+      mostrar("no", "Falha ao gravar", e.message);
+    }
+  };
+
+  desenhar();
+})();
+</script>
+</body>
+</html>
